@@ -600,48 +600,46 @@ function compare() {
 // that immediately precede the key (they belong to this key).
 function extractTopLevelBlocks(rawYaml) {
   const lines = rawYaml.split('\n');
+  const keyIdxs = []; // [{key, idx}]
 
-  // Find indices of top-level key lines (no leading whitespace, matches "key:")
-  const keyLineIdxs = []; // [{key, idx}]
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (line.startsWith(' ') || line.startsWith('\t')) continue;
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const m = line.match(/^([^:#\[{'"` ][^:#]*?)\s*:/);
-    if (m) keyLineIdxs.push({ key: m[1].trim(), idx: i });
+    // Must start at column 0 (not indented)
+    if (!line || line[0] === ' ' || line[0] === '\t') continue;
+    const t = line.trim();
+    if (!t || t[0] === '#' || t[0] === '-') continue;
+    // Find first colon — everything before it is the key
+    const ci = line.indexOf(':');
+    if (ci <= 0) continue;
+    const key = line.slice(0, ci).trim();
+    if (key) keyIdxs.push({ key, idx: i });
   }
 
-  if (!keyLineIdxs.length) return { header: rawYaml, blocks: {}, order: [] };
+  if (!keyIdxs.length) return { header: rawYaml, blocks: {}, order: [] };
 
-  // For each key, extend its start backwards to capture leading comments/empty lines
-  // (stopping before the previous key's last content line)
-  const blockStarts = [];
-  for (let i = 0; i < keyLineIdxs.length; i++) {
-    let start = keyLineIdxs[i].idx;
-    const floor = i > 0 ? keyLineIdxs[i - 1].idx + 1 : 0;
-    let j = start - 1;
-    while (j >= floor) {
+  // Extend each block start backwards over preceding comment/blank lines
+  const blockStarts = keyIdxs.map(({ idx }, i) => {
+    let start = idx;
+    const floor = i > 0 ? keyIdxs[i - 1].idx + 1 : 0;
+    for (let j = idx - 1; j >= floor; j--) {
       const t = lines[j].trim();
-      if (t === '' || t.startsWith('#')) { start = j; j--; }
+      if (!t || t[0] === '#') start = j;
       else break;
     }
-    blockStarts.push(start);
-  }
+    return start;
+  });
 
   const header = lines.slice(0, blockStarts[0]).join('\n');
   const blocks = {}, order = [];
 
-  for (let i = 0; i < keyLineIdxs.length; i++) {
+  keyIdxs.forEach(({ key }, i) => {
     const bStart = blockStarts[i];
-    const bEnd   = i < keyLineIdxs.length - 1 ? blockStarts[i + 1] : lines.length;
-    const key    = keyLineIdxs[i].key;
-    order.push(key);
-    // Strip trailing empty lines from block (they'll become the inter-block gap)
+    const bEnd   = i < keyIdxs.length - 1 ? blockStarts[i + 1] : lines.length;
     let blockLines = lines.slice(bStart, bEnd);
-    while (blockLines.length && blockLines[blockLines.length - 1].trim() === '') blockLines.pop();
+    while (blockLines.length && !blockLines[blockLines.length - 1].trim()) blockLines.pop();
+    order.push(key);
     blocks[key] = blockLines.join('\n');
-  }
+  });
 
   return { header, blocks, order };
 }
@@ -662,26 +660,132 @@ function injectRComments(block, key) {
   return block;
 }
 
-function reorderByText(rawL, rawR, insertRComm) {
-  const { header, blocks, order: lOrder } = extractTopLevelBlocks(rawL);
-  const { order: rOrder } = extractTopLevelBlocks(rawR); // 直接從右側文字取順序
-  const parts = [];
+// Extract sub-blocks from a list of lines at a given indent level
+function extractBlocksAtLevel(lines, indentLen) {
+  const prefix = ' '.repeat(indentLen);
+  const header = [];
+  const blocks = {};
+  const order = [];
+  let currentKey = null;
+  let blockLines = [];
 
+  const flush = () => {
+    if (currentKey !== null) {
+      blocks[currentKey] = blockLines;
+      order.push(currentKey);
+      blockLines = [];
+      currentKey = null;
+    }
+  };
+
+  for (const line of lines) {
+    if (line === '' || line.trim() === '') {
+      if (currentKey !== null) blockLines.push(line);
+      else header.push(line);
+      continue;
+    }
+    const isAtLevel = line.startsWith(prefix) && (line[indentLen] !== ' ');
+    if (isAtLevel) {
+      const rest = line.slice(indentLen);
+      const colonIdx = rest.indexOf(':');
+      if (colonIdx > 0 && !rest.startsWith('#') && !rest.startsWith('-')) {
+        const key = rest.slice(0, colonIdx).trim();
+        if (key) {
+          flush();
+          currentKey = key;
+          blockLines = [line];
+          continue;
+        }
+      }
+    }
+    if (currentKey !== null) blockLines.push(line);
+    else header.push(line);
+  }
+  flush();
+  return { header, blocks, order };
+}
+
+// Recursively reorder lines of a block's children using parsedRef as key order
+function reorderLinesRecursive(lines, parsedRef) {
+  if (!parsedRef || typeof parsedRef !== 'object' || Array.isArray(parsedRef) || lines.length === 0) {
+    return lines;
+  }
+  // Detect child indent level from first non-empty non-comment line
+  let childIndent = -1;
+  for (const line of lines) {
+    if (line.trim() && !line.trim().startsWith('#')) {
+      childIndent = line.match(/^(\s*)/)[1].length;
+      break;
+    }
+  }
+  if (childIndent < 0) return lines;
+
+  const { header, blocks, order } = extractBlocksAtLevel(lines, childIndent);
+  if (order.length === 0) return lines;
+
+  const refKeys = Object.keys(parsedRef);
+  const result = [...header];
+  const emitted = new Set();
+
+  refKeys.forEach(k => {
+    if (blocks[k] === undefined) return;
+    emitted.add(k);
+    const childLines = blocks[k].slice(1); // lines after the key line itself
+    const reorderedChildren = reorderLinesRecursive(childLines, parsedRef[k]);
+    result.push(...[blocks[k][0], ...reorderedChildren]);
+  });
+  // keys in old but not in ref — append at end
+  order.forEach(k => {
+    if (!emitted.has(k)) result.push(...blocks[k]);
+  });
+
+  return result;
+}
+
+function reorderByText(rawL, insertRComm) {
+  const { header, blocks: rawBlocks, order: rawLOrder } = extractTopLevelBlocks(rawL);
+
+  const lParsedKeys = Object.keys(parsedL);
+  const blockByParsedKey = {};
+  lParsedKeys.forEach((pk, i) => {
+    if (i < rawLOrder.length) blockByParsedKey[pk] = rawBlocks[rawLOrder[i]];
+  });
+  const extraRawKeys = rawLOrder.slice(lParsedKeys.length);
+
+  const rOrder = Object.keys(parsedR);
+  const parts = [];
   if (header && header.trim()) parts.push(header.trimEnd());
 
   rOrder.forEach(k => {
-    if (blocks[k] === undefined) return;
-    parts.push(insertRComm ? injectRComments(blocks[k], k) : blocks[k]);
+    let block = blockByParsedKey[k];
+    if (block === undefined) return;
+    // Recursively reorder nested keys within this block
+    const blockLines = block.split('\n');
+    const keyLineIdx = blockLines.findIndex(l => {
+      const t = l.trim();
+      return t && !t.startsWith('#');
+    });
+    if (keyLineIdx >= 0 && parsedR[k] && typeof parsedR[k] === 'object' && !Array.isArray(parsedR[k])) {
+      const keyLine = blockLines[keyLineIdx];
+      const childLines = blockLines.slice(keyLineIdx + 1);
+      const reordered = reorderLinesRecursive(childLines, parsedR[k]);
+      block = [...blockLines.slice(0, keyLineIdx + 1), ...reordered].join('\n');
+    }
+    parts.push(insertRComm ? injectRComments(block, k) : block);
   });
-  // 左側有但右側沒有的 key 附加在最後
-  lOrder.forEach(k => { if (!rOrder.includes(k)) parts.push(blocks[k]); });
+  lParsedKeys.forEach(k => {
+    if (!rOrder.includes(k) && blockByParsedKey[k] !== undefined)
+      parts.push(blockByParsedKey[k]);
+  });
+  extraRawKeys.forEach(k => { if (rawBlocks[k]) parts.push(rawBlocks[k]); });
 
   return parts.join('\n\n') + '\n';
 }
 
+
 function buildExportOutput() {
   const insertRComm = document.getElementById('toggleRComm').checked;
-  return reorderByText(rawYamlL, rawYamlR, insertRComm);
+  return reorderByText(rawYamlL, insertRComm);
 }
 
 function exportReordered() {
