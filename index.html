@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YAML 比對工具</title>
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --panel: #1a1d27;
+      --border: #2d3148;
+      --mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      --lh: 22px;
+      --fs: 12.5px;
+    }
+
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: #e2e8f0; min-height: 100vh; }
+
+    header {
+      background: var(--panel); border-bottom: 1px solid var(--border);
+      padding: 14px 24px; display: flex; align-items: center; gap: 12px;
+    }
+    header h1 { font-size: 1.15rem; font-weight: 700; color: #a78bfa; }
+    header span { font-size: 0.8rem; color: #64748b; }
+
+    .container { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
+
+    /* ── Controls ── */
+    .controls { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
+    .btn-compare {
+      background: #7c3aed; color: #fff; border: none;
+      padding: 9px 26px; border-radius: 7px;
+      font-size: 0.88rem; font-weight: 700; cursor: pointer; transition: background .15s;
+    }
+    .btn-compare:hover { background: #6d28d9; }
+    .btn-clear {
+      background: transparent; color: #64748b; border: 1px solid var(--border);
+      padding: 9px 16px; border-radius: 7px; font-size: 0.82rem; cursor: pointer;
+      transition: color .15s, border-color .15s;
+    }
+    .btn-clear:hover { color: #94a3b8; border-color: #3d4268; }
+    .toggle-wrap { display: flex; align-items: center; gap: 8px; margin-left: auto; font-size: 0.82rem; color: #94a3b8; }
+    .toggle { position: relative; width: 40px; height: 22px; cursor: pointer; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; inset: 0; background: #2d3148; border-radius: 11px; transition: background .2s; }
+    .slider::before {
+      content: ''; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px;
+      background: #64748b; border-radius: 50%; transition: transform .2s, background .2s;
+    }
+    .toggle input:checked + .slider { background: #4f46e5; }
+    .toggle input:checked + .slider::before { transform: translateX(18px); background: #a78bfa; }
+
+    /* ── Input panels (with line numbers) ── */
+    .inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .panel-hdr {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 9px 14px; border-bottom: 1px solid var(--border); font-size: 0.82rem; font-weight: 700;
+    }
+    .panel-hdr.left  { color: #34d399; }
+    .panel-hdr.right { color: #60a5fa; }
+    .panel-hdr label {
+      cursor: pointer; background: #2d3148; padding: 3px 10px; border-radius: 5px;
+      font-size: 0.72rem; font-weight: 500; color: #94a3b8; transition: background .15s;
+    }
+    .panel-hdr label:hover { background: #3d4268; }
+    input[type="file"] { display: none; }
+
+    .editor-wrap { display: flex; height: 280px; overflow: hidden; }
+    .line-nums {
+      background: #13151f; color: #3d4268; font-family: var(--mono); font-size: var(--fs);
+      line-height: var(--lh); padding: 10px 8px 10px 10px; text-align: right;
+      user-select: none; overflow: hidden; min-width: 38px; white-space: pre;
+      border-right: 1px solid var(--border);
+    }
+    .editor-wrap textarea {
+      flex: 1; background: transparent; border: none; resize: none;
+      padding: 10px 12px; font-family: var(--mono); font-size: var(--fs);
+      line-height: var(--lh); color: #cbd5e1; outline: none;
+      overflow-y: auto; overflow-x: auto; white-space: pre; tab-size: 2;
+    }
+    .editor-wrap textarea::placeholder { color: #2d3a50; }
+
+    /* ── Diff view ── */
+    #diff-view { display: none; margin-bottom: 20px; }
+    .diff-header-bar { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 0; }
+    .diff-col-title {
+      font-size: 0.78rem; font-weight: 700; padding: 7px 10px;
+      border-radius: 8px 8px 0 0; text-align: center;
+    }
+    .diff-col-title.left  { background: #0e2018; color: #34d399; border: 1px solid #1a4030; border-bottom: none; }
+    .diff-col-title.right { background: #0e1a2e; color: #60a5fa; border: 1px solid #1a3050; border-bottom: none; }
+
+    .diff-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .diff-panel {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 0 0 8px 8px; overflow-y: auto; max-height: 540px;
+    }
+
+    /* each aligned row */
+    .dr {
+      display: flex; align-items: center; min-height: var(--lh);
+      border-bottom: 1px solid #181c2c; font-family: var(--mono); font-size: var(--fs);
+    }
+    .dr:last-child { border-bottom: none; }
+
+    .dr-ln {
+      min-width: 34px; padding: 0 5px; text-align: right;
+      color: #3d4268; background: #13151f; border-right: 1px solid var(--border);
+      user-select: none; flex-shrink: 0; font-size: 11px; line-height: var(--lh);
+      align-self: stretch; display: flex; align-items: center; justify-content: flex-end;
+    }
+    .dr-body {
+      flex: 1; padding: 1px 10px; white-space: pre; overflow: hidden;
+      text-overflow: ellipsis; line-height: var(--lh);
+    }
+
+    /* placeholder row (other side is missing) */
+    .dr.ph { background: #0f1117; }
+    .dr.ph .dr-ln { color: #1e2133; background: #0d0f18; }
+    .dr.ph .dr-body { color: #1e2133; }
+
+    /* missing: key exists in R but NOT in L  → highlight on R side, blank on L */
+    .dr.miss { background: #1e0d0d; }
+    .dr.miss .dr-ln { background: #2a0f0f; color: #f87171; }
+    .dr.miss .dr-body { color: #fca5a5; }
+    .dr.miss .vv { color: #fca5a5; }
+
+    /* extra: key exists in L but NOT in R  → highlight on L side, blank on R */
+    .dr.extra { background: #0d1e0d; }
+    .dr.extra .dr-ln { background: #0f2a0f; color: #86efac; }
+    .dr.extra .dr-body { color: #bbf7d0; }
+    .dr.extra .vv { color: #bbf7d0; }
+
+    /* diffval: both exist, value differs */
+    .dr.diffv { background: #1a1808; }
+    .dr.diffv .dr-ln { background: #252208; color: #fbbf24; }
+    .dr.diffv .dr-body { color: #fde68a; }
+    .dr.diffv .vv { color: #fde68a; }
+
+    /* separator between R-ordered block and extra-L block */
+    .dr.sep { min-height: 6px; background: #13151f; border-bottom: 2px solid #2d3148; }
+
+    /* key / value colouring in body */
+    .kk { color: #93c5fd; }        /* key name */
+    .cc { color: #64748b; }        /* colon + indent chars */
+    .vv { color: #a3e635; }        /* value */
+    .vv.vstr { color: #86efac; }   /* string value */
+    .vv.vnum { color: #fbbf24; }   /* number value */
+    .vv.vbool { color: #f472b6; }  /* boolean */
+    .vv.vnull { color: #64748b; font-style: italic; }
+
+
+    /* ── comment rows ── */
+    .dr.comm .dr-ln { color: #2d4a2d; background: #0d130d; }
+    .dr.comm .dr-body { color: #4a7c4a; font-style: italic; white-space: pre; }
+
+    /* ── blank spacer row between top-level keys ── */
+    .dr.spacer { min-height: 10px; background: transparent; border-bottom: none; }
+
+    /* ── Export modal ── */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,.7); z-index: 100;
+      align-items: center; justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: #1a1d27; border: 1px solid #3d4268;
+      border-radius: 12px; width: min(760px, 94vw);
+      max-height: 80vh; display: flex; flex-direction: column;
+    }
+    .modal-hdr {
+      padding: 14px 18px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      font-weight: 700; color: #a78bfa;
+    }
+    .modal-hdr button {
+      background: transparent; border: none; color: #64748b;
+      font-size: 1.1rem; cursor: pointer; padding: 2px 6px;
+    }
+    .modal-hdr button:hover { color: #e2e8f0; }
+    .modal-body { flex: 1; overflow: auto; padding: 14px 18px; }
+    .modal-body pre {
+      font-family: var(--mono); font-size: var(--fs);
+      color: #cbd5e1; white-space: pre; line-height: 1.6;
+    }
+    .modal-foot {
+      padding: 12px 18px; border-top: 1px solid var(--border);
+      display: flex; gap: 10px; justify-content: flex-end;
+    }
+    .btn-copy {
+      background: #7c3aed; color: #fff; border: none;
+      padding: 8px 20px; border-radius: 6px;
+      font-size: 0.85rem; font-weight: 600; cursor: pointer;
+      transition: background .15s;
+    }
+    .btn-copy:hover { background: #6d28d9; }
+    .btn-copy.copied { background: #15803d; }
+
+    @media (max-width: 800px) {
+      .inputs, .diff-panels, .diff-header-bar { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>YAML 比對工具</h1>
+  <span>Key 結構差異分析</span>
+</header>
+
+<div class="container">
+  <div class="controls">
+    <button class="btn-compare" onclick="compare()">開始比對</button>
+    <button class="btn-export" onclick="exportReordered()" id="btnExport" style="display:none;background:#0f766e;color:#fff;border:none;padding:9px 20px;border-radius:7px;font-size:.88rem;font-weight:700;cursor:pointer;">輸出舊版（依新版順序）</button>
+    <button class="btn-clear" onclick="clearAll()">清除</button>
+    <div class="toggle-wrap">
+      <span>比對 Value 差異</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggleVal" onchange="rerender()" />
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <div class="inputs">
+    <div class="panel">
+      <div class="panel-hdr left">
+        <span>已設定的 YML（舊版 / 基準）</span>
+        <label for="fileL">上傳檔案</label>
+        <input type="file" id="fileL" accept=".yml,.yaml,.txt" />
+      </div>
+      <div class="editor-wrap">
+        <div class="line-nums" id="numsL">1</div>
+        <textarea id="yamlL" placeholder="貼上已設定的 YAML 內容…" spellcheck="false"></textarea>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-hdr right">
+        <span>未設定的 YML（新版 / 參考）</span>
+        <label for="fileR">上傳檔案</label>
+        <input type="file" id="fileR" accept=".yml,.yaml,.txt" />
+      </div>
+      <div class="editor-wrap">
+        <div class="line-nums" id="numsR">1</div>
+        <textarea id="yamlR" placeholder="貼上新版（未設定）的 YAML 內容…" spellcheck="false"></textarea>
+      </div>
+    </div>
+  </div>
+
+  <div id="diff-view">
+    <div class="diff-header-bar">
+      <div class="diff-col-title left">已設定（舊版）— 依新版順序排列</div>
+      <div class="diff-col-title right">新版（未設定）</div>
+    </div>
+    <div class="diff-panels">
+      <div class="diff-panel" id="diffL"></div>
+      <div class="diff-panel" id="diffR"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Export modal -->
+<div class="modal-overlay" id="exportModal" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-hdr">
+      <span>已設定（舊版）依新版順序排列</span>
+      <button onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body"><pre id="exportPre"></pre></div>
+    <div class="modal-foot">
+      <label style="display:flex;align-items:center;gap:8px;font-size:0.82rem;color:#94a3b8;margin-right:auto;cursor:pointer;">
+        <label class="toggle" style="margin:0">
+          <input type="checkbox" id="toggleRComm" onchange="refreshExport()" />
+          <span class="slider"></span>
+        </label>
+        插入新版註釋
+      </label>
+      <button class="btn-copy" id="btnCopy" onclick="copyExport()">複製</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── LocalStorage persistence ──
+function saveToStorage(side, val) {
+  try { localStorage.setItem('yaml_'+side, val); } catch(e) {}
+}
+function loadFromStorage(side) {
+  try { return localStorage.getItem('yaml_'+side) || ''; } catch(e) { return ''; }
+}
+
+// ── Line number editor ──
+function setupEditor(taId, numsId) {
+  const ta = document.getElementById(taId);
+  const nums = document.getElementById(numsId);
+  function sync() {
+    const n = ta.value.split('\n').length;
+    let s = ''; for (let i = 1; i <= n; i++) s += i + '\n';
+    nums.textContent = s;
+    nums.scrollTop = ta.scrollTop;
+  }
+  ta.addEventListener('input', sync);
+  ta.addEventListener('scroll', () => { nums.scrollTop = ta.scrollTop; });
+  sync();
+}
+
+['L','R'].forEach(s => {
+  // Restore from localStorage
+  const saved = loadFromStorage(s);
+  if (saved) document.getElementById('yaml'+s).value = saved;
+
+  setupEditor('yaml'+s, 'nums'+s);
+
+  // Save on input
+  document.getElementById('yaml'+s).addEventListener('input', e => saveToStorage(s, e.target.value));
+
+  document.getElementById('file'+s).addEventListener('change', e => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = ev => {
+      document.getElementById('yaml'+s).value = ev.target.result;
+      saveToStorage(s, ev.target.result);
+      setupEditor('yaml'+s, 'nums'+s);
+    };
+    r.readAsText(f, 'utf-8');
+  });
+});
+
+// ── Flatten object to {dotted.path: value} ──
+function flatten(obj, pre, res) {
+  pre = pre||''; res = res||{};
+  if (obj === null || obj === undefined) { res[pre] = obj; return res; }
+  if (Array.isArray(obj)) {
+    if (!obj.length) { res[pre] = []; return res; }
+    obj.forEach((v,i) => flatten(v, pre?(pre+'['+i+']'):('['+i+']'), res));
+    return res;
+  }
+  if (typeof obj === 'object') {
+    const ks = Object.keys(obj);
+    if (!ks.length) { res[pre] = {}; return res; }
+    ks.forEach(k => {
+      const safe = /^[a-zA-Z_$][\w$]*$/.test(k) ? k : '"'+k+'"';
+      flatten(obj[k], pre?(pre+'.'+safe):safe, res);
+    });
+    return res;
+  }
+  res[pre] = obj; return res;
+}
+
+// ── Build aligned rows by walking objR as canonical order ──
+// Each row: { key, depth, isObj, valR, valL, existsL, extra }
+function buildAlignedRows(objR, objL) {
+  const rows = [];
+  const coveredPaths = new Set();
+
+  function isExpandable(v) {
+    return v !== null && v !== undefined && typeof v === 'object';
+  }
+
+  function walk(nodeR, nodeL, pathPfx, depth) {
+    // ── Array: align by index ──
+    if (Array.isArray(nodeR)) {
+      const lenR = nodeR.length;
+      const lenL = Array.isArray(nodeL) ? nodeL.length : 0;
+      for (let i = 0; i < Math.max(lenR, lenL); i++) {
+        const path = pathPfx + '[' + i + ']';
+        coveredPaths.add(path);
+        const hasR = i < lenR, hasL = i < lenL;
+        const valR = hasR ? nodeR[i] : undefined;
+        const valL = hasL ? nodeL[i] : undefined;
+        const objR = isExpandable(valR) && !Array.isArray(valR);
+        const objL = isExpandable(valL) && !Array.isArray(valL);
+        const arrR = Array.isArray(valR);
+        rows.push({
+          path, key: '-', depth, isArrayItem: true,
+          isObj: objR || arrR,
+          valR: (objR || arrR) ? null : valR,
+          valL: (objR || objL || Array.isArray(valL)) ? null : valL,
+          existsL: hasL,
+          extra: !hasR && hasL,
+        });
+        if (objR || arrR) walk(valR, hasL ? valL : null, path, depth + 1);
+      }
+      return;
+    }
+
+    // ── Object ──
+    if (!nodeR || typeof nodeR !== 'object') return;
+    Object.keys(nodeR).forEach(k => {
+      const path = pathPfx ? pathPfx+'.'+k : k;
+      coveredPaths.add(path);
+      const valR = nodeR[k];
+      const nodeIsArr = Array.isArray(valR);
+      const nodeIsObj = isExpandable(valR) && !nodeIsArr;
+      const hasL = nodeL !== null && nodeL !== undefined && typeof nodeL === 'object' && !Array.isArray(nodeL) && (k in nodeL);
+      const valL = hasL ? nodeL[k] : undefined;
+      const lIsObj = isExpandable(valL) && !Array.isArray(valL);
+
+      rows.push({
+        path, key: k, depth, isArrayItem: false,
+        isObj: nodeIsObj || nodeIsArr,
+        valR: (nodeIsObj || nodeIsArr) ? null : valR,
+        valL: (nodeIsObj || nodeIsArr) ? null : (hasL ? (lIsObj ? null : valL) : undefined),
+        existsL: hasL,
+        extra: false,
+      });
+
+      if (nodeIsObj || nodeIsArr) {
+        walk(valR, (hasL ? valL : null), path, depth + 1);
+      }
+    });
+  }
+
+  walk(objR, objL, '', 0);
+
+  // Append extra keys/items from L not covered
+  function walkExtra(nodeL, pathPfx, depth) {
+    if (!nodeL || typeof nodeL !== 'object') return;
+    if (Array.isArray(nodeL)) {
+      nodeL.forEach((v, i) => {
+        const path = pathPfx + '[' + i + ']';
+        if (coveredPaths.has(path)) return;
+        coveredPaths.add(path);
+        const isObj = isExpandable(v) && !Array.isArray(v);
+        const isArr = Array.isArray(v);
+        rows.push({ path, key: '-', depth, isArrayItem: true, isObj: isObj||isArr, valR: undefined, valL: (isObj||isArr)?null:v, existsL: true, extra: true });
+        if (isObj || isArr) walkExtra(v, path, depth+1);
+      });
+      return;
+    }
+    Object.keys(nodeL).forEach(k => {
+      const path = pathPfx ? pathPfx+'.'+k : k;
+      if (coveredPaths.has(path)) return;
+      coveredPaths.add(path);
+      const valL = nodeL[k];
+      const isObj = isExpandable(valL) && !Array.isArray(valL);
+      const isArr = Array.isArray(valL);
+      rows.push({ path, key: k, depth, isArrayItem: false, isObj: isObj||isArr, valR: undefined, valL: (isObj||isArr)?null:valL, existsL: true, extra: true });
+      if (isObj || isArr) walkExtra(valL, path, depth+1);
+    });
+  }
+  walkExtra(objL, '', 0);
+
+  return rows;
+}
+
+// ── Build key path → line number map from raw YAML text ──
+// ── Format a value into display lines (strings get quoted, multi-line expanded) ──
+function formatValLines(v) {
+  if (v === undefined) return null;      // not present
+  if (v === null)      return [['null',  'vnull']];
+  if (typeof v === 'boolean') return [[String(v), 'vbool']];
+  if (typeof v === 'number')  return [[String(v), 'vnum']];
+  if (typeof v === 'object')  return [[JSON.stringify(v), 'vstr']];
+  const s = String(v);
+  const parts = s.split('\n');
+  // Remove trailing empty line (YAML block scalars end with \n)
+  if (parts[parts.length - 1] === '') parts.pop();
+  if (parts.length === 0) return [['"\"', 'vstr']];
+  if (parts.length === 1) return [['"' + parts[0] + '"', 'vstr']];
+  // Multi-line: opening quote on first, closing quote on last
+  const result = [['"' + parts[0], 'vstr']];
+  for (let i = 1; i < parts.length - 1; i++) result.push([parts[i], 'vstr']);
+  result.push([parts[parts.length - 1] + '"', 'vstr']);
+  return result;
+}
+
+// ── Render a single .dr row ──
+function drRow(cls, ln, bodyHtml) {
+  return '<div class="dr '+cls+'"><span class="dr-ln">'+ln+'</span><span class="dr-body">'+bodyHtml+'</span></div>';
+}
+function phRow() {
+  return '<div class="dr ph"><span class="dr-ln">·</span><span class="dr-body"> </span></div>';
+}
+function contRow(cls, indent, valText, valCls) {
+  const body = '<span class="cc">'+escHtml(indent+'  ')+'</span>'
+             + '<span class="vv '+valCls+'">'+escHtml(valText)+'</span>';
+  return '<div class="dr '+cls+'"><span class="dr-ln"> </span><span class="dr-body">'+body+'</span></div>';
+}
+
+// ── Determine row status ──
+function rowStatus(row, showVal) {
+  if (row.extra)         return 'extra';
+  if (!row.existsL)      return 'miss';
+  if (showVal && !row.isObj && JSON.stringify(row.valL) !== JSON.stringify(row.valR)) return 'diffv';
+  return 'same';
+}
+const KEY_COLOUR = { miss:'#fca5a5', extra:'#bbf7d0', diffv:'#fde68a', same:'#93c5fd' };
+
+// ── Render aligned diff for one logical row (may produce multiple .dr rows) ──
+function renderAlignedRow(row, lnL, lnR, showVal) {
+  const status  = rowStatus(row, showVal);
+  const showL   = row.extra || row.existsL;
+  const showR   = !row.extra;
+  const indent  = '  '.repeat(row.depth);
+  const keyCol  = KEY_COLOUR[status];
+
+  const valLLines = (showL && !row.isObj) ? formatValLines(row.valL) : null;
+  const valRLines = (showR && !row.isObj) ? formatValLines(row.valR) : null;
+
+  const linesL  = valLLines ? valLLines.length : 0;
+  const linesR  = valRLines ? valRLines.length : 0;
+  const maxExtra = Math.max(linesL, linesR) - 1; // continuation rows beyond first
+
+  function keyBody(valFirstLine, valCls) {
+    let b;
+    if (row.isArrayItem) {
+      b = '<span class="cc">'+escHtml(indent)+'</span>'
+        + '<span class="cc" style="color:'+keyCol+'">- </span>';
+    } else {
+      b = '<span class="cc">'+escHtml(indent)+'</span>'
+        + '<span class="kk" style="color:'+keyCol+'">'+escHtml(row.key)+'</span>'
+        + '<span class="cc">: </span>';
+    }
+    if (!row.isObj && valFirstLine !== undefined) {
+      b += '<span class="vv '+valCls+'">'+escHtml(valFirstLine)+'</span>';
+    }
+    return b;
+  }
+
+  let htmlL = '', htmlR = '';
+
+  // ── Left panel ──
+  if (!showL) {
+    htmlL += phRow();
+    for (let i = 0; i < maxExtra; i++) htmlL += phRow();
+  } else {
+    const fl = valLLines || [['', '']];
+    htmlL += drRow(status, lnL, keyBody(fl[0][0], fl[0][1]));
+    for (let i = 1; i < fl.length; i++) htmlL += contRow(status, indent, fl[i][0], fl[i][1]);
+    for (let i = fl.length - 1; i < maxExtra; i++) htmlL += phRow();
+  }
+
+  // ── Right panel ──
+  if (!showR) {
+    htmlR += phRow();
+    for (let i = 0; i < maxExtra; i++) htmlR += phRow();
+  } else {
+    const fr = valRLines || [['', '']];
+    htmlR += drRow(status, lnR, keyBody(fr[0][0], fr[0][1]));
+    for (let i = 1; i < fr.length; i++) htmlR += contRow(status, indent, fr[i][0], fr[i][1]);
+    for (let i = fr.length - 1; i < maxExtra; i++) htmlR += phRow();
+  }
+
+  return { htmlL, htmlR };
+}
+
+let parsedL = null, parsedR = null, rawYamlL = '', rawYamlR = '';
+let commentMapL = {}, commentMapR = {};
+
+// ── Build map: key-path → preceding comment/blank lines ──
+function buildCommentMap(rawYaml) {
+  const lines = rawYaml.split('\n');
+  const map = {};
+  const stack = []; // [{indent, key}]
+  let pending = []; // accumulated comment/blank lines
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimStart();
+    // Blank or comment → accumulate
+    if (!trimmed || trimmed.startsWith('#')) { pending.push(line); continue; }
+    const indent = line.length - trimmed.length;
+    while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+    const m = trimmed.match(/^([^:#\[{'"` ][^:#]*?)\s*:/);
+    if (m) {
+      stack.push({ indent, key: m[1].trim() });
+      const path = stack.map(s => s.key).join('.');
+      if (pending.length) { map[path] = pending; pending = []; }
+    } else {
+      pending = []; // value / continuation line — discard pending
+    }
+  }
+  return map;
+}
+
+function compare() {
+  rawYamlL = document.getElementById('yamlL').value;
+  rawYamlR = document.getElementById('yamlR').value;
+  if (!rawYamlL.trim() && !rawYamlR.trim()) { alert('請至少貼上一個 YAML'); return; }
+  try { parsedL = rawYamlL.trim() ? (jsyaml.load(rawYamlL) || {}) : {}; }
+  catch(e) { alert('左側 YAML 解析錯誤：\n'+e.message); return; }
+  try { parsedR = rawYamlR.trim() ? (jsyaml.load(rawYamlR) || {}) : {}; }
+  catch(e) { alert('右側 YAML 解析錯誤：\n'+e.message); return; }
+  commentMapL = buildCommentMap(rawYamlL);
+  commentMapR = buildCommentMap(rawYamlR);
+  document.getElementById('btnExport').style.display = '';
+  rerender();
+}
+
+// ── Reorder objL keys to match objR key order ──
+// ── Text-based top-level block extraction (preserves comments) ──
+// A "block" = the key line + its value lines + any comment/empty lines
+// that immediately precede the key (they belong to this key).
+function extractTopLevelBlocks(rawYaml) {
+  const lines = rawYaml.split('\n');
+
+  // Find indices of top-level key lines (no leading whitespace, matches "key:")
+  const keyLineIdxs = []; // [{key, idx}]
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith(' ') || line.startsWith('\t')) continue;
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const m = line.match(/^([^:#\[{'"` ][^:#]*?)\s*:/);
+    if (m) keyLineIdxs.push({ key: m[1].trim(), idx: i });
+  }
+
+  if (!keyLineIdxs.length) return { header: rawYaml, blocks: {}, order: [] };
+
+  // For each key, extend its start backwards to capture leading comments/empty lines
+  // (stopping before the previous key's last content line)
+  const blockStarts = [];
+  for (let i = 0; i < keyLineIdxs.length; i++) {
+    let start = keyLineIdxs[i].idx;
+    const floor = i > 0 ? keyLineIdxs[i - 1].idx + 1 : 0;
+    let j = start - 1;
+    while (j >= floor) {
+      const t = lines[j].trim();
+      if (t === '' || t.startsWith('#')) { start = j; j--; }
+      else break;
+    }
+    blockStarts.push(start);
+  }
+
+  const header = lines.slice(0, blockStarts[0]).join('\n');
+  const blocks = {}, order = [];
+
+  for (let i = 0; i < keyLineIdxs.length; i++) {
+    const bStart = blockStarts[i];
+    const bEnd   = i < keyLineIdxs.length - 1 ? blockStarts[i + 1] : lines.length;
+    const key    = keyLineIdxs[i].key;
+    order.push(key);
+    // Strip trailing empty lines from block (they'll become the inter-block gap)
+    let blockLines = lines.slice(bStart, bEnd);
+    while (blockLines.length && blockLines[blockLines.length - 1].trim() === '') blockLines.pop();
+    blocks[key] = blockLines.join('\n');
+  }
+
+  return { header, blocks, order };
+}
+
+// Reorder left YAML text to match right YAML's top-level key order, preserving comments
+// Insert R's comment lines right before the key line in a block
+function injectRComments(block, key) {
+  const rComms = (commentMapR[key] || []).filter(l => l.trim().startsWith('#'));
+  if (!rComms.length) return block;
+  const lines = block.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (t && !t.startsWith('#')) {
+      // Insert R comments immediately before the key line
+      return [...lines.slice(0, i), ...rComms, ...lines.slice(i)].join('\n');
+    }
+  }
+  return block;
+}
+
+function reorderByText(rawL, parsedR, insertRComm) {
+  const { header, blocks, order } = extractTopLevelBlocks(rawL);
+  const rKeys = Object.keys(parsedR);
+  const parts = [];
+
+  if (header && header.trim()) parts.push(header.trimEnd());
+
+  rKeys.forEach(k => {
+    if (blocks[k] === undefined) return;
+    parts.push(insertRComm ? injectRComments(blocks[k], k) : blocks[k]);
+  });
+  order.forEach(k => { if (!rKeys.includes(k)) parts.push(blocks[k]); });
+
+  return parts.join('\n\n') + '\n';
+}
+
+function buildExportOutput() {
+  const insertRComm = document.getElementById('toggleRComm').checked;
+  return reorderByText(rawYamlL, parsedR, insertRComm);
+}
+
+function exportReordered() {
+  if (!parsedL || !parsedR) return;
+  document.getElementById('exportPre').textContent = buildExportOutput();
+  document.getElementById('exportModal').classList.add('open');
+  document.getElementById('btnCopy').textContent = '複製';
+  document.getElementById('btnCopy').classList.remove('copied');
+}
+
+function refreshExport() {
+  document.getElementById('exportPre').textContent = buildExportOutput();
+}
+
+function closeModal() {
+  document.getElementById('exportModal').classList.remove('open');
+}
+
+function copyExport() {
+  const text = document.getElementById('exportPre').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('btnCopy');
+    btn.textContent = '已複製！'; btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '複製'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+function rerender() {
+  if (parsedL === null) return;
+  const showVal = document.getElementById('toggleVal').checked;
+  renderDiff(showVal);
+}
+
+function renderDiff(showVal) {
+  const rows = buildAlignedRows(parsedR, parsedL);
+
+  let sepInserted = false;
+  const finalRows = [];
+  let prevDepth = -1;
+  rows.forEach(r => {
+    if (r.extra && !sepInserted) { finalRows.push({sep:true}); sepInserted = true; }
+    // Add spacer before any non-array-item key when previous depth >= current depth
+    // (sibling key or returning from a deeper block) — but not before the very first key
+    if (!r.isArrayItem && prevDepth >= r.depth) {
+      finalRows.push({spacer:true});
+    }
+    if (!r.isArrayItem) prevDepth = r.depth;
+    finalRows.push(r);
+  });
+
+  let lnL = 0, lnR = 0;
+  let htmlL = '', htmlR = '';
+  const spacerRow = '<div class="dr spacer"></div>';
+
+  finalRows.forEach(r => {
+    if (r.sep)    { htmlL += '<div class="dr sep"></div>'; htmlR += '<div class="dr sep"></div>'; return; }
+    if (r.spacer) { htmlL += spacerRow; htmlR += spacerRow; return; }
+
+    const showL = r.extra || r.existsL;
+    const showR = !r.extra;
+
+    if (showL) lnL++;
+    if (showR) lnR++;
+    const { htmlL: hL, htmlR: hR } = renderAlignedRow(r, lnL, lnR, showVal);
+    htmlL += hL;
+    htmlR += hR;
+  });
+
+  document.getElementById('diffL').innerHTML = htmlL;
+  document.getElementById('diffR').innerHTML = htmlR;
+  document.getElementById('diff-view').style.display = 'block';
+
+  const pL = document.getElementById('diffL');
+  const pR = document.getElementById('diffR');
+  pL.onscroll = () => { pR.scrollTop = pL.scrollTop; };
+  pR.onscroll = () => { pL.scrollTop = pR.scrollTop; };
+}
+
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function clearAll() {
+  ['L','R'].forEach(s => {
+    document.getElementById('yaml'+s).value = '';
+    saveToStorage(s, '');
+    setupEditor('yaml'+s,'nums'+s);
+  });
+  document.getElementById('diff-view').style.display = 'none';
+  document.getElementById('key-result').style.display = 'none';
+  document.getElementById('key-result').innerHTML = '';
+  parsedL = null; parsedR = null; rawYamlL = ''; rawYamlR = '';
+  document.getElementById('btnExport').style.display = 'none';
+}
+</script>
+</body>
+</html>
