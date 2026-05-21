@@ -662,25 +662,26 @@ function injectRComments(block, key) {
   return block;
 }
 
-function reorderByText(rawL, parsedR, insertRComm) {
-  const { header, blocks, order } = extractTopLevelBlocks(rawL);
-  const rKeys = Object.keys(parsedR);
+function reorderByText(rawL, rawR, insertRComm) {
+  const { header, blocks, order: lOrder } = extractTopLevelBlocks(rawL);
+  const { order: rOrder } = extractTopLevelBlocks(rawR); // 直接從右側文字取順序
   const parts = [];
 
   if (header && header.trim()) parts.push(header.trimEnd());
 
-  rKeys.forEach(k => {
+  rOrder.forEach(k => {
     if (blocks[k] === undefined) return;
     parts.push(insertRComm ? injectRComments(blocks[k], k) : blocks[k]);
   });
-  order.forEach(k => { if (!rKeys.includes(k)) parts.push(blocks[k]); });
+  // 左側有但右側沒有的 key 附加在最後
+  lOrder.forEach(k => { if (!rOrder.includes(k)) parts.push(blocks[k]); });
 
   return parts.join('\n\n') + '\n';
 }
 
 function buildExportOutput() {
   const insertRComm = document.getElementById('toggleRComm').checked;
-  return reorderByText(rawYamlL, parsedR, insertRComm);
+  return reorderByText(rawYamlL, rawYamlR, insertRComm);
 }
 
 function exportReordered() {
